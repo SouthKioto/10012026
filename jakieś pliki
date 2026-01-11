@@ -1,0 +1,255 @@
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity fsm_ctrl is
+    port (
+        clk      : in  std_logic;
+        rst      : in  std_logic;
+        start    : in  std_logic;
+        mem_rd   : out std_logic;
+        reg_load : out std_logic;
+        reg_exec : out std_logic;
+        mem_wr   : out std_logic;
+        done     : out std_logic
+    );
+end fsm_ctrl;
+
+architecture rtl of fsm_ctrl is
+    type state_t is (IDLE, READ_ST, LOAD_ST, PROCESS_ST, WRITE_ST, DONE_ST);
+    signal state, next_state : state_t;
+begin
+
+    -- rejestr stanu
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if rst = '1' then
+                state <= IDLE;
+            else
+                state <= next_state;
+            end if;
+        end if;
+    end process;
+
+    -- logika przejść
+    process(state, start)
+    begin
+        next_state <= state;
+        case state is
+            when IDLE =>
+                if start = '1' then
+                    next_state <= READ_ST;
+                end if;
+
+            when READ_ST    => next_state <= LOAD_ST;
+            when LOAD_ST    => next_state <= PROCESS_ST;
+            when PROCESS_ST => next_state <= WRITE_ST;
+            when WRITE_ST   => next_state <= DONE_ST;
+            when DONE_ST    => next_state <= IDLE;
+        end case;
+    end process;
+
+    -- logika wyjść
+    process(state)
+    begin
+        mem_rd   <= '0';
+        reg_load<= '0';
+        reg_exec<= '0';
+        mem_wr  <= '0';
+        done    <= '0';
+
+        case state is
+            when READ_ST    => mem_rd   <= '1';
+            when LOAD_ST    => reg_load <= '1';
+            when PROCESS_ST => reg_exec <= '1';
+            when WRITE_ST   => mem_wr   <= '1';
+            when DONE_ST    => done     <= '1';
+            when others     => null;
+        end case;
+    end process;
+
+end rtl;
+
+
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity reg_mem is
+    port (
+        clk      : in  std_logic;
+        rd_en    : in  std_logic;
+        wr_en    : in  std_logic;
+        rd_addr  : in  integer range 0 to 7;
+        wr_addr  : in  integer range 0 to 7;
+        data_in  : in  std_logic_vector(7 downto 0);
+        data_out : out std_logic_vector(7 downto 0)
+    );
+end reg_mem;
+
+architecture rtl of reg_mem is
+    type mem_t is array (0 to 7) of std_logic_vector(7 downto 0);
+    signal ram_block : mem_t := (others => (others => '0'));
+    signal data_reg  : std_logic_vector(7 downto 0);
+
+    attribute ram_init_file : string;
+    attribute ram_init_file of ram_block : signal is "data.mif";
+begin
+
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if wr_en = '1' then
+                ram_block(wr_addr) <= data_in;
+            end if;
+
+            if rd_en = '1' then
+                data_reg <= ram_block(rd_addr);
+            end if;
+        end if;
+    end process;
+
+    data_out <= data_reg;
+
+end rtl;
+
+
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity final_lab is
+    port (
+    clk      : in  std_logic;
+    rst      : in  std_logic;
+    start    : in  std_logic;
+    addr_sw  : in  std_logic_vector(2 downto 0); 
+    done     : out std_logic;
+    hex0     : out std_logic_vector(6 downto 0);
+    hex1     : out std_logic_vector(6 downto 0);
+    key0     : in  std_logic;
+    key1     : in  std_logic
+);
+end final_lab;
+
+architecture rtl of final_lab is
+    signal mem_rd, mem_wr     : std_logic;
+    signal reg_load, reg_exec : std_logic;
+    signal mem_to_reg         : std_logic_vector(7 downto 0);
+    signal reg_to_mem         : std_logic_vector(7 downto 0);
+
+    signal rd_addr, wr_addr : integer range 0 to 7;
+
+    function to_hex(val : std_logic_vector(3 downto 0))
+        return std_logic_vector is
+    begin
+        case val is
+            when "0000" => return "1000000";
+            when "0001" => return "1111001";
+            when "0010" => return "0100100";
+            when "0011" => return "0110000";
+            when "0100" => return "0011001";
+            when "0101" => return "0010010";
+            when "0110" => return "0000010";
+            when "0111" => return "1111000";
+            when "1000" => return "0000000";
+            when "1001" => return "0010000";
+            when others => return "1111111";
+        end case;
+    end function;
+begin
+
+    rd_addr <= to_integer(unsigned(addr_sw));
+    wr_addr <= (rd_addr + 1) mod 8;
+
+    fsm : entity work.fsm_ctrl
+        port map (
+            clk      => clk,
+            rst      => rst,
+            start    => start,
+            mem_rd   => mem_rd,
+            reg_load => reg_load,
+            reg_exec => reg_exec,
+            mem_wr   => mem_wr,
+            done     => done
+        );
+
+    reg0 : entity work.work_reg
+        port map (
+            clk     => clk,
+            rst     => rst,
+            load    => reg_load,
+            exec    => reg_exec,
+            op      => '1',
+            dir     => '0',
+            data_in => mem_to_reg,
+            q       => reg_to_mem
+        );
+
+    ram : entity work.reg_mem
+        port map (
+            clk      => clk,
+            rd_en    => mem_rd,
+            wr_en    => mem_wr,
+            rd_addr  => rd_addr,
+            wr_addr  => wr_addr,
+            data_in  => reg_to_mem,
+            data_out => mem_to_reg
+        );
+
+    hex0 <= to_hex(reg_to_mem(3 downto 0));
+    hex1 <= to_hex(reg_to_mem(7 downto 4));
+
+end rtl;
+
+
+
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity work_reg is
+    port (
+        clk       : in  std_logic;
+        rst       : in  std_logic;
+        load      : in  std_logic; 
+        exec      : in  std_logic;
+        op        : in  std_logic;
+        dir       : in  std_logic;
+        data_in   : in  std_logic_vector(7 downto 0);
+        q         : out std_logic_vector(7 downto 0)
+    );
+end work_reg;
+
+architecture rtl of work_reg is
+    signal reg : std_logic_vector(7 downto 0);
+
+    -- Instancja rejestru (reg_inst)
+    begin
+        process(clk)
+        begin
+            if rising_edge(clk) then
+                if rst = '1' then
+                    reg <= (others => '0');
+                elsif load = '1' then
+                    reg <= data_in;
+                elsif exec = '1' then
+                    -- Operacje w zależności od op i dir
+                    if op = '0' then
+                        if dir = '0' then
+                            reg <= reg(6 downto 0) & '0';  -- Rotacja w lewo
+                        else
+                            reg <= '0' & reg(7 downto 1);  -- Rotacja w prawo
+                        end if;
+                    else
+                        -- Inne operacje mogą być dodane tutaj
+                    end if;
+                end if;
+            end if;
+        end process;
+
+        q <= reg; -- Wyjście z rejestru
+end rtl;
