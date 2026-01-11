@@ -39,4 +39,3 @@ begin
     data_out <= data_reg;
 
 end rtl;
-end rtl;
